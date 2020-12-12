@@ -1,6 +1,8 @@
 ## Generalized-activated Deep Double Deterministic Policy Gradient
 
-### Run GD3 and get results
+`pureDDPG` is the vanilla DDPG and `DDPG` is the fine-tuned version of `pureDDPG` which could achieve much better performance than `DDPG` at various environments. TD3 use fine-tuned `DDPG` as the baselines, and so as in our work.
+
+### Run GD3
 ```python
 CUDA_VISIBLE_DEVICES="1" python main.py --env 'Reacher-v2' --seed 1 --policy 'GD3' --activate 'poly' --beta 2 --dir './logs/GD3/poly2/Reacher/r0' --save-model
 ```
