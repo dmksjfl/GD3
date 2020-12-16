@@ -61,6 +61,8 @@ class GD3(object):
 		critic_lr=1e-3,
 		hidden_sizes=[400, 300],
 		beta=0.001,
+		root=3,
+		bias=0,
 		num_noise_samples=50,
 		with_importance_sampling=0,
         operator = 'softmax',
@@ -90,6 +92,8 @@ class GD3(object):
 		self.noise_clip = noise_clip
 
 		self.beta = beta
+		self.root = root
+		self.bias = bias
 		self.operator = operator
 		self.num_noise_samples = num_noise_samples
 		self.with_importance_sampling = with_importance_sampling
@@ -112,12 +116,12 @@ class GD3(object):
 		self.train_one_q_and_pi(replay_buffer, update_q1=True, batch_size=batch_size)
 		self.train_one_q_and_pi(replay_buffer, update_q1=False, batch_size=batch_size)
 
-	def generalized_activation_opertator(self, beta, importance_sampling = True, operator = 'softmax'):
-		if operator == 'softmax':
-			def softmax_operator(q_vals, noise_pdf=None):
+	def generalized_activation_opertator(self, beta, root, bias, importance_sampling = True, operator = 'exponential'):
+		if operator == 'exponential':
+			def exponential_operator(q_vals, noise_pdf=None):
 				max_q_vals = torch.max(q_vals, 1, keepdim=True).values
-				norm_q_vals = q_vals - max_q_vals
-				e_beta_normQ = torch.exp(beta * norm_q_vals)
+				norm_q_vals = beta * (q_vals - max_q_vals) + bias
+				e_beta_normQ = torch.pow(root, norm_q_vals)
 				Q_mult_e = q_vals * e_beta_normQ
 
 				numerators = Q_mult_e
@@ -130,17 +134,17 @@ class GD3(object):
 				sum_numerators = torch.sum(numerators, 1)
 				sum_denominators = torch.sum(denominators, 1)
 
-				softmax_q_vals = sum_numerators / sum_denominators
+				exponential_q_vals = sum_numerators / sum_denominators
 
-				softmax_q_vals = torch.unsqueeze(softmax_q_vals, 1)
-				return softmax_q_vals
-			return softmax_operator
+				exponential_q_vals = torch.unsqueeze(exponential_q_vals, 1)
+				return exponential_q_vals
+			return exponential_operator
 
 		elif operator == 'ReLu':
 			def relu_operator(q_vals, noise_pdf=None):
 				max_q_vals = torch.max(q_vals, 1, keepdim=True).values
 				norm_q_vals = q_vals - max_q_vals
-				e_beta_normQ = norm_q_vals + 1
+				e_beta_normQ = beta * norm_q_vals + bias
 				Q_mult_e = q_vals * e_beta_normQ
 
 				numerators = Q_mult_e
@@ -164,7 +168,7 @@ class GD3(object):
 				alpha_index = 0.05
 				max_q_vals = torch.max(q_vals, 1, keepdim=True).values
 				norm_q_vals = q_vals - max_q_vals
-				e_beta_normQ = abs(alpha_index * norm_q_vals) ** beta + 1
+				e_beta_normQ = abs(alpha_index * norm_q_vals) ** beta + bias
 				Q_mult_e = q_vals * e_beta_normQ
 
 				numerators = Q_mult_e
@@ -190,7 +194,7 @@ class GD3(object):
 				norm_q_vals = q_vals - max_q_vals
 				def tanh_fun(x):
 					return (2*torch.exp(beta*x))/(torch.exp(beta*x) + torch.exp(-beta*x))
-				e_beta_normQ = tanh_fun(norm_q_vals)
+				e_beta_normQ = tanh_fun(norm_q_vals) + bias
 				Q_mult_e = q_vals * e_beta_normQ
 
 				numerators = Q_mult_e
@@ -247,7 +251,7 @@ class GD3(object):
 			next_Q = torch.min(next_Q1, next_Q2)
 			next_Q = torch.squeeze(next_Q, 2)
             
-			gd3_next_Q = self.generalized_activation_opertator(beta = self.beta, 
+			gd3_next_Q = self.generalized_activation_opertator(beta = self.beta, root = self.root, bias = self.bias,
                                                                 importance_sampling = self.with_importance_sampling,
                                                                 operator = self.operator)
 			activate_next_Q = gd3_next_Q(next_Q, noise_pdf)

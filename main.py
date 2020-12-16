@@ -5,6 +5,7 @@ import argparse
 import os
 import utils
 import random
+import math
 
 import TD3
 import SD3
@@ -38,7 +39,7 @@ def eval_policy(policy, env_name, seed, eval_episodes=10, eval_cnt=None):
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser()
 	parser.add_argument("--dir", default="./logs")
-	parser.add_argument("--policy", default="GD3", help='policy to use, support GD3, TD3, Mixed GD3 and Weighted GD3')
+	parser.add_argument("--policy", default="GD3", help='policy to use, support GD3, TD3, SD3, Mixed GD3 and Weighted GD3')
 	parser.add_argument("--env", default="HalfCheetah-v2")
 	parser.add_argument("--seed", default=0, type=int)
 	parser.add_argument("--start-steps", default=1e4, type=int, help='Number of steps for the warm-up stage using random policy')
@@ -63,7 +64,9 @@ if __name__ == "__main__":
 	parser.add_argument("--policy-freq", default=2, type=int, help='Frequency of delayed policy updates')
 
 	parser.add_argument("--beta", default="best", help='The parameter beta in activation')
-	parser.add_argument("--activate", default='softmax', help='Activation to use in GD3, use softmax by default. Support ReLu, tanh, softmax and polynomial')
+	parser.add_argument("--activate", default='softmax', help='Activation to use in GD3, use softmax by default. Support ReLu, tanh, exponential and polynomial')
+	parser.add_argument("--root", default=math.e, help='Used in exponential activation, what root to use, i.e. exp, 2, 3')
+	parser.add_argument("--bias", default=0, help='Used in GD3, the bias term in the activation function, default is 0')
 	parser.add_argument("--num-noise-samples", type=int, default=50, help='The number of noises to sample for each next_action')
 	parser.add_argument("--imps", type=int, default=0, help='Whether to use importance sampling for gaussian noise when calculating activation values')
 	## Mixed activation GD3 parameters
@@ -123,14 +126,6 @@ if __name__ == "__main__":
 
 		policy = TD3.TD3(**kwargs)
 	elif args.policy == "DDPG":
-		kwargs = {
-			"state_dim": state_dim,
-			"action_dim": action_dim,
-			"max_action": max_action,
-			"discount": args.discount,
-			"tau": args.tau,
-			"device": device,
-		}
 		policy = DDPG.DDPG(**kwargs)
 	
 	elif args.policy == "pureDDPG":
@@ -167,6 +162,8 @@ if __name__ == "__main__":
 
 		kwargs['beta'] = float(args.beta)
 		kwargs['operator'] = args.activate
+		kwargs['root'] = float(args.root)
+		kwargs['bias'] = float(args.bias)
 		kwargs['with_importance_sampling'] = args.imps
 		kwargs["policy_noise"] = args.policy_noise * max_action
 		kwargs["noise_clip"] = args.noise_clip * max_action
