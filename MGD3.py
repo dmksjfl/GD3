@@ -148,7 +148,7 @@ class MGD3(object):
 			def relu_operator(q_vals, noise_pdf=None):
 				max_q_vals = torch.max(q_vals, 1, keepdim=True).values
 				norm_q_vals = q_vals - max_q_vals
-				e_beta_normQ = norm_q_vals + 1
+				e_beta_normQ = beta * norm_q_vals + 1
 				Q_mult_e = q_vals * e_beta_normQ
 
 				numerators = Q_mult_e
