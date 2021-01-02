@@ -21,6 +21,7 @@ def eval_policy(policy, env_name, seed, eval_episodes=10, eval_cnt=None):
 	eval_env.seed(seed + 100)
 
 	avg_reward = 0.
+	q_value = 0.
 	for episode_idx in range(eval_episodes):
 		state, done = eval_env.reset(), False
 		while not done:
@@ -29,11 +30,13 @@ def eval_policy(policy, env_name, seed, eval_episodes=10, eval_cnt=None):
 
 			avg_reward += reward
 			state = next_state
+			q_value += policy.get_Q().cpu().detach().numpy()[0][0]
 	avg_reward /= eval_episodes
+	q_value /= eval_episodes
 
-	print("[{}] Evaluation over {} episodes: {}".format(eval_cnt, eval_episodes, avg_reward))
+	print("[{}] Evaluation over {} episodes: {} Average Q: {}".format(eval_cnt, eval_episodes, avg_reward, q_value))
 	
-	return avg_reward
+	return avg_reward, q_value
 
 
 if __name__ == "__main__":
@@ -66,6 +69,7 @@ if __name__ == "__main__":
 	parser.add_argument("--beta", default="best", help='The parameter beta in activation')
 	parser.add_argument("--activate", default='softmax', help='Activation to use in GD3, use softmax by default. Support ReLu, tanh, exponential and polynomial')
 	parser.add_argument("--root", default=math.e, help='Used in exponential activation, what root to use, i.e. exp, 2, 3')
+	parser.add_argument("--alpha", default=0.05, help='Used in poly activation, what coefficient to use')
 	parser.add_argument("--bias", default=0, help='Used in GD3, the bias term in the activation function, default is 0')
 	parser.add_argument("--num-noise-samples", type=int, default=50, help='The number of noises to sample for each next_action')
 	parser.add_argument("--imps", type=int, default=0, help='Whether to use importance sampling for gaussian noise when calculating activation values')
@@ -87,9 +91,6 @@ if __name__ == "__main__":
 	writer = SummaryWriter('{}/tb'.format(outdir))
 	if args.save_model and not os.path.exists("{}/models".format(outdir)):
 		os.makedirs("{}/models".format(outdir))
-	## write logs to record training parameters
-	with open(outdir + 'log.txt','w') as f:
-		f.write('\n Policy: {}; Env: {}, seed: {}, beta: {}; activate: {}'.format(args.policy, args.env, args.seed, args.beta, args.activate))
 
 	env = gym.make(args.env)
 
@@ -163,6 +164,7 @@ if __name__ == "__main__":
 		kwargs['beta'] = float(args.beta)
 		kwargs['operator'] = args.activate
 		kwargs['root'] = float(args.root)
+		kwargs['alpha'] = float(args.alpha)
 		kwargs['bias'] = float(args.bias)
 		kwargs['with_importance_sampling'] = args.imps
 		kwargs["policy_noise"] = args.policy_noise * max_action
@@ -199,6 +201,12 @@ if __name__ == "__main__":
 
 	if args.load_model != "":
 		policy.load("./models/{}".format(args.load_model))
+	
+	## write logs to record training parameters
+	with open(outdir + 'log.txt','w') as f:
+		f.write('\n Policy: {}; Env: {}, seed: {}, beta: {}; activate: {}'.format(args.policy, args.env, args.seed, args.beta, args.activate))
+		for item in kwargs.items():
+			f.write('\n {}'.format(item))
 
 	replay_buffer = utils.ReplayBuffer(state_dim, action_dim, device)
 
@@ -211,6 +219,11 @@ if __name__ == "__main__":
 	episode_reward = 0
 	episode_timesteps = 0
 	episode_num = 0
+	avg_actor_loss = 0.
+	avg_critic_loss = 0.
+	episode_q = 0.
+	operator_dis = 0.
+	bias_dis = 0.
 
 	for t in range(int(args.steps)):
 		episode_timesteps += 1
@@ -237,6 +250,14 @@ if __name__ == "__main__":
 			else:
 				policy.train(replay_buffer, args.batch_size)
 		
+		actor_loss, critic_loss = policy.get_loss()
+		avg_actor_loss += actor_loss
+		avg_critic_loss += critic_loss
+		train_q = policy.get_Q().cpu().detach().numpy()[0][0]
+		episode_q += train_q
+		operator_dis += policy.get_dis()
+		bias_dis += policy.get_bias()
+		#print(operator_dis)
 		if done: 
 			print("Total T: {} Episode Num: {} Episode T: {} Reward: {}".format(t+1, episode_num+1, episode_timesteps, episode_reward))
 			writer.add_scalar('train return', episode_reward, global_step = t+1)
@@ -247,9 +268,20 @@ if __name__ == "__main__":
 			episode_num += 1 
 
 		if (t + 1) % args.eval_freq == 0:
-			eval_return = eval_policy(policy, args.env, args.seed, eval_cnt=eval_cnt)
+			eval_return, eval_q = eval_policy(policy, args.env, args.seed, eval_cnt=eval_cnt)
+			writer.add_scalar('train mean Q', episode_q/args.eval_freq, global_step = t+1)
+			writer.add_scalar('train actor loss', avg_actor_loss/args.eval_freq, global_step = t+1)
+			writer.add_scalar('train critic loss', avg_critic_loss/args.eval_freq, global_step = t+1)
+			writer.add_scalar('train operator distance', operator_dis/args.eval_freq, global_step = t+1)
+			writer.add_scalar('train bias', bias_dis/args.eval_freq, global_step = t+1)
 			writer.add_scalar('test return', eval_return, global_step = t+1)
+			writer.add_scalar('test mean Q', eval_q, global_step = t+1)
 			eval_cnt += 1
+			episode_q = 0.
+			operator_dis = 0.
+			bias_dis = 0.
+			avg_actor_loss = 0.
+			avg_critic_loss = 0.
 
 			if args.save_model:
 				policy.save('{}/models/model'.format(outdir))

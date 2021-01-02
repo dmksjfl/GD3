@@ -62,6 +62,7 @@ class GD3(object):
 		hidden_sizes=[400, 300],
 		beta=0.001,
 		root=3,
+		alpha=0.05,
 		bias=0,
 		num_noise_samples=50,
 		with_importance_sampling=0,
@@ -93,10 +94,16 @@ class GD3(object):
 
 		self.beta = beta
 		self.root = root
+		self.alpha = alpha
 		self.bias = bias
 		self.operator = operator
 		self.num_noise_samples = num_noise_samples
 		self.with_importance_sampling = with_importance_sampling
+		self.actor_loss = 0
+		self.critic_loss = 0
+		self.Q_his = 0
+		self.distance = 0.
+		self.bias_distance = 0.
 
 	def select_action(self, state):
 		state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
@@ -108,20 +115,30 @@ class GD3(object):
 		q2 = self.critic2(state, action2)
 
 		action = action1 if q1 >= q2 else action2
+		self.Q_his = q1 if q1 >= q2 else q2
 
 		return action.cpu().data.numpy().flatten()
 
 
 	def train(self, replay_buffer, batch_size=100):
 		self.train_one_q_and_pi(replay_buffer, update_q1=True, batch_size=batch_size)
+		d1 = self.operator_dis
+		b1 = self.bias_dis
 		self.train_one_q_and_pi(replay_buffer, update_q1=False, batch_size=batch_size)
+		d2 = self.operator_dis
+		b2 = self.bias_dis
+		self.critic_loss = (self.c1_loss+self.c2_loss)/2
+		self.actor_loss = (self.a1_loss+self.a2_loss)/2
+		self.distance = (torch.mean(d1)+torch.mean(d2))/2
+		self.bias_distance = (torch.mean(b1)+torch.mean(b2))/2
 
-	def generalized_activation_opertator(self, beta, root, bias, importance_sampling = True, operator = 'exponential'):
+	def generalized_activation_opertator(self, beta, root, alpha, bias, importance_sampling = True, operator = 'exponential'):
 		if operator == 'exponential':
 			def exponential_operator(q_vals, noise_pdf=None):
 				max_q_vals = torch.max(q_vals, 1, keepdim=True).values
 				norm_q_vals = beta * (q_vals - max_q_vals) + bias
 				e_beta_normQ = torch.pow(root, norm_q_vals)
+				#print(e_beta_normQ)
 				Q_mult_e = q_vals * e_beta_normQ
 
 				numerators = Q_mult_e
@@ -165,10 +182,12 @@ class GD3(object):
         
 		elif operator == 'poly':
 			def poly_operator(q_vals, noise_pdf=None):
-				alpha_index = 0.05
+				alpha_index = alpha
 				max_q_vals = torch.max(q_vals, 1, keepdim=True).values
 				norm_q_vals = q_vals - max_q_vals
+				#print(norm_q_vals)
 				e_beta_normQ = abs(alpha_index * norm_q_vals) ** beta + bias
+				#print(e_beta_normQ)
 				Q_mult_e = q_vals * e_beta_normQ
 
 				numerators = Q_mult_e
@@ -251,18 +270,21 @@ class GD3(object):
 			next_Q = torch.min(next_Q1, next_Q2)
 			next_Q = torch.squeeze(next_Q, 2)
             
-			gd3_next_Q = self.generalized_activation_opertator(beta = self.beta, root = self.root, bias = self.bias,
+			gd3_next_Q = self.generalized_activation_opertator(beta = self.beta, root = self.root, alpha = self.alpha, bias = self.bias,
                                                                 importance_sampling = self.with_importance_sampling,
                                                                 operator = self.operator)
 			activate_next_Q = gd3_next_Q(next_Q, noise_pdf)
+			self.operator_dis = torch.max(next_Q, 1, keepdim=True).values - activate_next_Q
 			next_Q = activate_next_Q
 
 			target_Q = reward + not_done * self.discount * next_Q
+			self.bias_dis = activate_next_Q - target_Q  ## bias = estimation by operator - true value
 
 		if update_q1:
 			current_Q = self.critic1(state, action)
 
 			critic1_loss = F.mse_loss(current_Q, target_Q)
+			#print(critic1_loss)
 
 			self.critic1_optimizer.zero_grad()
 			critic1_loss.backward()
@@ -273,6 +295,8 @@ class GD3(object):
 			self.actor1_optimizer.zero_grad()
 			actor1_loss.backward()
 			self.actor1_optimizer.step()
+			self.c1_loss = critic1_loss
+			self.a1_loss = actor1_loss
 
 			for param, target_param in zip(self.critic1.parameters(), self.critic1_target.parameters()):
 				target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
@@ -294,6 +318,8 @@ class GD3(object):
 			self.actor2_optimizer.zero_grad()
 			actor2_loss.backward()
 			self.actor2_optimizer.step()
+			self.c2_loss = critic2_loss
+			self.a2_loss = actor2_loss
 
 			for param, target_param in zip(self.critic2.parameters(), self.critic2_target.parameters()):
 				target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
@@ -312,6 +338,18 @@ class GD3(object):
 		torch.save(self.critic2_optimizer.state_dict(), filename + "_critic2_optimizer")
 		torch.save(self.actor2.state_dict(), filename + "_actor2")
 		torch.save(self.actor2_optimizer.state_dict(), filename + "_actor2_optimizer")
+
+	def get_loss(self):
+		return self.actor_loss, self.critic_loss
+
+	def get_Q(self):
+		return self.Q_his
+	
+	def get_dis(self):
+		return self.distance
+	
+	def get_bias(self):
+		return self.bias_distance
 
 	def load(self, filename):
 		self.critic1.load_state_dict(torch.load(filename + "_critic1"))
