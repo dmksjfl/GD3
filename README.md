@@ -1,4 +1,4 @@
-## Generalized-activated Deep Double Deterministic Policy Gradient
+## Generalized-activated Deep Double Deterministic Policy Gradients
 
 `pureDDPG` is the vanilla DDPG and `DDPG` is the fine-tuned version of `pureDDPG` which could achieve much better performance than `DDPG` at various environments. TD3 use fine-tuned `DDPG` as the baselines, and so as in our work.
 
